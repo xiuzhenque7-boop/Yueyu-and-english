@@ -18,6 +18,10 @@ export default function AccentAnalysisCard({
   isPlaying,
 }: AccentAnalysisCardProps) {
   const [copied, setCopied] = useState(false);
+  const [copiedCantonese, setCopiedCantonese] = useState(false);
+  const [copiedEnglish, setCopiedEnglish] = useState(false);
+
+  const isOcrDualTranslation = !!(result.cantoneseTranslation || result.englishTranslation);
 
   const handleCopy = () => {
     navigator.clipboard.writeText(result.translation);
@@ -36,70 +40,165 @@ export default function AccentAnalysisCard({
         
         {/* Box 1: Translation Output Display */}
         <div className="bg-white rounded-3xl border border-[#E2E8F0] shadow-sm p-6 space-y-4 flex flex-col justify-between">
-          <div className="space-y-4">
-            {/* Header / Language Badge */}
-            <div className="flex justify-between items-center pb-3 border-b border-[#F1F5F9]">
-              <span className="text-[11px] font-bold tracking-wider text-[#64748B] uppercase">
-                标准普通话译文
-              </span>
-              <div className="flex items-center gap-1.5 text-xs text-[#1A1C1E] font-semibold bg-[#F1F5F9] border border-[#E2E8F0] px-2.5 py-0.5 rounded-full uppercase tracking-wider">
-                <Globe size={12} />
-                <span>书面语转换</span>
+          {!isOcrDualTranslation ? (
+            // Standard Single Translation
+            <>
+              <div className="space-y-4">
+                {/* Header / Language Badge */}
+                <div className="flex justify-between items-center pb-3 border-b border-[#F1F5F9]">
+                  <span className="text-[11px] font-bold tracking-wider text-[#64748B] uppercase">
+                    智能核心译文
+                  </span>
+                  <div className="flex items-center gap-1.5 text-xs text-[#1A1C1E] font-semibold bg-[#F1F5F9] border border-[#E2E8F0] px-2.5 py-0.5 rounded-full uppercase tracking-wider">
+                    <Globe size={12} />
+                    <span>自动语系翻译</span>
+                  </div>
+                </div>
+
+                {/* Translation Main text */}
+                <div className="space-y-3">
+                  <p className="text-2xl sm:text-3xl font-light text-[#1A1C1E] leading-relaxed font-sans select-all font-semibold">
+                    {result.translation}
+                  </p>
+                  
+                  {/* Pinyin reading */}
+                  {result.pinyin && (
+                    <div className="p-3 bg-slate-50 border border-slate-100 rounded-xl space-y-1">
+                      <span className="text-[10px] text-slate-400 font-bold tracking-wider uppercase font-mono block">
+                        读音助读标注
+                      </span>
+                      <p className="text-xs font-mono text-slate-600 leading-relaxed select-all">
+                        {result.pinyin}
+                      </p>
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              {/* Action buttons footer for output */}
+              <div className="pt-4 border-t border-[#F1F5F9] flex items-center justify-between">
+                <button
+                  onClick={() => onSpeak(result.translation)}
+                  className={`flex items-center gap-1.5 px-4 py-2.5 rounded-xl text-xs font-bold transition-all ${
+                    isPlaying 
+                      ? "bg-red-500 text-white hover:bg-red-600 shadow-sm" 
+                      : "bg-[#1A1C1E] text-white hover:bg-slate-800 shadow-sm"
+                  }`}
+                >
+                  <Volume2 size={15} />
+                  {isPlaying ? "正在播放..." : "播放语音"}
+                </button>
+
+                <button
+                  onClick={handleCopy}
+                  className="p-2.5 border border-[#E2E8F0] text-[#64748B] hover:text-[#1A1C1E] hover:bg-slate-50 rounded-xl transition-all flex items-center gap-1.5 text-xs font-semibold"
+                  title="复制译文"
+                >
+                  {copied ? (
+                    <>
+                      <Check size={14} className="text-[#10B981]" />
+                      <span className="text-[#065F46] font-bold">已复制</span>
+                    </>
+                  ) : (
+                    <>
+                      <Copy size={14} />
+                      <span>复制结果</span>
+                    </>
+                  )}
+                </button>
+              </div>
+            </>
+          ) : (
+            // OCR Dual Custom Translation (Mandarin -> Cantonese & English)
+            <div className="space-y-6 flex-1 flex flex-col justify-between">
+              <div className="space-y-5">
+                {/* Box Header */}
+                <div className="flex justify-between items-center pb-3 border-b border-[#F1F5F9]">
+                  <span className="text-[11px] font-bold tracking-wider text-[#64748B] uppercase">
+                    中文拍照识别 ➜ 双向本土化结果
+                  </span>
+                  <span className="text-[10px] bg-indigo-50 border border-indigo-200 text-indigo-750 px-2.5 py-0.5 rounded-full font-bold uppercase tracking-wider">
+                    多模态翻译
+                  </span>
+                </div>
+
+                {/* Stacked Bilingual cards */}
+                <div className="space-y-4">
+                  {/* 1. Cantonese Output Cards */}
+                  {result.cantoneseTranslation && (
+                    <div className="p-4 bg-slate-50/65 rounded-2xl border border-slate-150 space-y-2.5">
+                      <div className="flex items-center justify-between">
+                        <span className="text-[10px] font-extrabold tracking-widest text-[#065F46] bg-[#E7F3EF] border border-[#BBD9CF] px-2 py-0.5 rounded-md uppercase">
+                          地道粤语本土口语 (Cantonese)
+                        </span>
+                        <div className="flex items-center gap-1.5">
+                          <button
+                            onClick={() => onSpeak(result.cantoneseTranslation || "")}
+                            className="p-1 px-2 rounded-lg text-[10px] font-bold bg-[#1A1C1E] text-white hover:bg-slate-800 flex items-center gap-1 transition-all"
+                          >
+                            <Volume2 size={11} /> 朗读
+                          </button>
+                          <button
+                            onClick={() => {
+                              navigator.clipboard.writeText(result.cantoneseTranslation || "");
+                              setCopiedCantonese(true);
+                              setTimeout(() => setCopiedCantonese(false), 2000);
+                            }}
+                            className="p-1 px-2 rounded-lg text-[10px] font-bold text-slate-500 hover:text-[#1A1C1E] bg-white border border-[#E2E8F0] flex items-center gap-1 transition-all"
+                          >
+                            {copiedCantonese ? <Check size={11} className="text-[#10B981]" /> : <Copy size={11} />}
+                            {copiedCantonese ? "已复制" : "复制"}
+                          </button>
+                        </div>
+                      </div>
+                      <p className="text-lg font-bold text-[#1A1C1E] leading-relaxed select-all">
+                        {result.cantoneseTranslation}
+                      </p>
+                      {result.pinyin && (
+                        <div className="text-[10px] font-mono text-slate-500 border-t border-dashed border-slate-200 pt-1.5 mt-1 flex gap-1 items-center">
+                          <span className="font-bold text-slate-400 shrink-0">粤拼Jyutping:</span>
+                          <span className="select-all block tracking-wide">{result.pinyin}</span>
+                        </div>
+                      )}
+                    </div>
+                  )}
+
+                  {/* 2. English Output Cards */}
+                  {result.englishTranslation && (
+                    <div className="p-4 bg-slate-50/65 rounded-2xl border border-slate-150 space-y-2.5">
+                      <div className="flex items-center justify-between">
+                        <span className="text-[10px] font-extrabold tracking-widest text-indigo-700 bg-indigo-50 border border-indigo-150 px-2 py-0.5 rounded-md uppercase">
+                          地道日常自然英语 (English)
+                        </span>
+                        <div className="flex items-center gap-1.5">
+                          <button
+                            onClick={() => onSpeak(result.englishTranslation || "")}
+                            className="p-1 px-2 rounded-lg text-[10px] font-bold bg-[#1A1C1E] text-white hover:bg-slate-800 flex items-center gap-1 transition-all"
+                          >
+                            <Volume2 size={11} /> 朗读
+                          </button>
+                          <button
+                            onClick={() => {
+                              navigator.clipboard.writeText(result.englishTranslation || "");
+                              setCopiedEnglish(true);
+                              setTimeout(() => setCopiedEnglish(false), 2000);
+                            }}
+                            className="p-1 px-2 rounded-lg text-[10px] font-bold text-slate-500 hover:text-[#1A1C1E] bg-white border border-[#E2E8F0] flex items-center gap-1 transition-all"
+                          >
+                            {copiedEnglish ? <Check size={11} className="text-[#10B981]" /> : <Copy size={11} />}
+                            {copiedEnglish ? "已复制" : "复制"}
+                          </button>
+                        </div>
+                      </div>
+                      <p className="text-lg font-bold text-[#1A1C1E] leading-relaxed select-all">
+                        {result.englishTranslation}
+                      </p>
+                    </div>
+                  )}
+                </div>
               </div>
             </div>
-
-            {/* Translation Main text */}
-            <div className="space-y-3">
-              <p className="text-2xl sm:text-3xl font-light text-[#1A1C1E] leading-relaxed font-sans select-all">
-                {result.translation}
-              </p>
-              
-              {/* Pinyin reading */}
-              {result.pinyin && (
-                <div className="p-3 bg-slate-50 border border-slate-100 rounded-xl space-y-1">
-                  <span className="text-[10px] text-slate-400 font-bold tracking-wider uppercase font-mono block">
-                    标准汉语拼音声调助读
-                  </span>
-                  <p className="text-xs font-mono text-slate-600 leading-relaxed select-all">
-                    {result.pinyin}
-                  </p>
-                </div>
-              )}
-            </div>
-          </div>
-
-          {/* Action buttons footer for output */}
-          <div className="pt-4 border-t border-[#F1F5F9] flex items-center justify-between">
-            <button
-              onClick={() => onSpeak(result.translation)}
-              className={`flex items-center gap-1.5 px-4 py-2.5 rounded-xl text-xs font-bold transition-all ${
-                isPlaying 
-                  ? "bg-red-500 text-white hover:bg-red-600 shadow-sm" 
-                  : "bg-[#1A1C1E] text-white hover:bg-slate-800 shadow-sm"
-              }`}
-            >
-              <Volume2 size={15} />
-              {isPlaying ? "正在播放..." : "即时播放普通话语音"}
-            </button>
-
-            <button
-              onClick={handleCopy}
-              className="p-2.5 border border-[#E2E8F0] text-[#64748B] hover:text-[#1A1C1E] hover:bg-slate-50 rounded-xl transition-all flex items-center gap-1.5 text-xs font-semibold"
-              title="复制译文"
-            >
-              {copied ? (
-                <>
-                  <Check size={14} className="text-[#10B981]" />
-                  <span className="text-[#065F46] font-bold">已复制</span>
-                </>
-              ) : (
-                <>
-                  <Copy size={14} />
-                  <span>复制结果</span>
-                </>
-              )}
-            </button>
-          </div>
+          )}
         </div>
 
         {/* Box 2: Dialect & Accent Report Card */}

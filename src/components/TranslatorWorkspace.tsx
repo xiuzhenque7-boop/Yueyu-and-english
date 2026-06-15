@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef } from "react";
-import { Mic, MicOff, Volume2, ArrowRightLeft, Sparkles, Languages, Trash2, ArrowRight, Play, Square, Settings, VolumeX, HelpCircle } from "lucide-react";
+import { Mic, MicOff, Volume2, ArrowRightLeft, Sparkles, Languages, Trash2, ArrowRight, Play, Square, Settings, VolumeX, HelpCircle, Camera } from "lucide-react";
 import { TranslationResult } from "../types";
+import PhotoOcrModal from "./PhotoOcrModal";
 
 interface TranslatorWorkspaceProps {
   onTranslateStart: () => void;
@@ -28,6 +29,27 @@ export default function TranslatorWorkspace({
   const [direction, setDirection] = useState<"to_mandarin" | "from_mandarin">("to_mandarin");
   const [targetLangFromMandarin, setTargetLangFromMandarin] = useState("粤语 (香港口音)");
 
+  // Photo OCR State & Handlers
+  const [isOcrOpen, setIsOcrOpen] = useState(false);
+
+  const handleOcrSuccess = (result: TranslationResult) => {
+    setIsOcrOpen(false);
+    setInputText(result.extractedText || "");
+    
+    // Auto-TTS if enabled
+    if (autoSpeak && result.translation) {
+      speakText(result.translation);
+    }
+
+    // Call upstream success callback
+    onTranslateSuccess(result, result.extractedText || "", "自动识别(图片识别)");
+  };
+
+  const handleOcrError = (err: string) => {
+    setIsOcrOpen(false);
+    onTranslateError(err);
+  };
+
   // TTS (Text-to-Speech) Settings
   const [isPlayingTts, setIsPlayingTts] = useState(false);
   const [playbackRate, setPlaybackRate] = useState(1.0);
@@ -39,6 +61,7 @@ export default function TranslatorWorkspace({
   const recognitionRef = useRef<any>(null);
   const synthRef = useRef<SpeechSynthesis | null>(null);
   const utteranceRef = useRef<SpeechSynthesisUtterance | null>(null);
+  const baselineTextRef = useRef("");
 
   // Check SpeechRecognition Support & TTS Voices
   useEffect(() => {
@@ -137,8 +160,11 @@ export default function TranslatorWorkspace({
     }
 
     try {
+      // Capture baseline text before we start appending
+      baselineTextRef.current = inputText;
+
       const rec = new SpeechRecognitionClass();
-      rec.continuous = false; // Stop after user stops speaking
+      rec.continuous = true; // Let user speak continuously
       rec.interimResults = true; // Show results in-progress
 
       // Set the appropriate language code based on direction and source selection
@@ -160,11 +186,16 @@ export default function TranslatorWorkspace({
       };
 
       rec.onresult = (e: any) => {
-        const currentResultIndex = e.resultIndex;
-        const transcript = e.results[currentResultIndex][0].transcript;
-        if (e.results[currentResultIndex].isFinal) {
-          setInputText(prev => prev + (prev ? " " : "") + transcript);
+        let sessionTranscript = "";
+        for (let i = 0; i < e.results.length; ++i) {
+          sessionTranscript += e.results[i][0].transcript;
         }
+        
+        // Real-time direct input
+        setInputText(() => {
+          const base = baselineTextRef.current;
+          return base ? (base.trim() + " " + sessionTranscript.trim()) : sessionTranscript;
+        });
       };
 
       rec.onerror = (e: any) => {
@@ -707,6 +738,16 @@ export default function TranslatorWorkspace({
                 </div>
               )}
 
+              {/* Camera OCR Button */}
+              <button
+                type="button"
+                onClick={() => setIsOcrOpen(true)}
+                className="p-3 bg-indigo-50 border border-indigo-200 text-indigo-700 hover:bg-indigo-100 rounded-full transition-all flex items-center justify-center hover:scale-105 active:scale-95 shadow-sm"
+                title="智能拍照识别与翻译"
+              >
+                <Camera size={18} />
+              </button>
+
               {/* Clear field */}
               {inputText && (
                 <button
@@ -742,106 +783,140 @@ export default function TranslatorWorkspace({
 
         {/* Guide / Preset phrases box wrapper for Quick Try */}
         {!inputText && (
-          <div className="bg-white rounded-3xl border border-[#E2E8F0] shadow-sm p-6 flex flex-col justify-between min-h-[300px]">
-            <div>
-              <div className="flex items-center gap-2 mb-4">
-                <Languages className="text-[#1A1C1E]" size={18} />
-                <h4 className="font-semibold text-[#1A1C1E] text-sm uppercase tracking-wider">
-                  {direction === "from_mandarin" ? "普通话 ➜ 方言本土特色句一键体验" : "方言与英语本土词语一键体验"}
-                </h4>
+          isListening ? (
+            <div className="bg-white rounded-3xl border border-emerald-200 shadow-sm p-8 flex flex-col justify-center items-center min-h-[300px] text-center space-y-6 animate-in fade-in duration-300">
+              {/* Premium Soundwaves */}
+              <div className="flex items-end justify-center gap-1.5 h-16 w-36">
+                <span className="w-1.5 bg-emerald-500 rounded-full h-4 animate-[bounce_0.6s_infinite]"></span>
+                <span className="w-1.5 bg-emerald-500 rounded-full h-8 animate-[bounce_0.8s_infinite_100ms]"></span>
+                <span className="w-1.5 bg-emerald-500 rounded-full h-12 animate-[bounce_0.5s_infinite_200ms]"></span>
+                <span className="w-1.5 bg-emerald-500 rounded-full h-16 animate-[bounce_0.7s_infinite_150ms]"></span>
+                <span className="w-1.5 bg-emerald-500 rounded-full h-10 animate-[bounce_0.9s_infinite_250ms]"></span>
+                <span className="w-1.5 bg-emerald-500 rounded-full h-6 animate-[bounce_0.6s_infinite_300ms]"></span>
               </div>
-              <p className="text-xs text-[#64748B] mb-4 leading-relaxed">
-                {direction === "from_mandarin" 
-                  ? "点击普通话名句，一键体验 DeepSeek 自动将其润色生成不同地域的极具人情味、原汁原味的特色方言与英语口音译文："
-                  : "点击下方特色名句，一键体验 DeepSeek 对不同地域特色口音及俚语特征的分析报告："}
-              </p>
               
-              <div className="space-y-3">
-                {direction === "to_mandarin" ? (
-                  <>
-                    {/* Cantonese HK */}
-                    <button
-                      onClick={() => applyQuickPhrase("唔该，幫我叫一架的士企喺巴士站側邊，顺便买返盒菠萝包。", "cantonese")}
-                      className="w-full text-left p-3 rounded-xl bg-slate-50 border border-[#E2E8F0] hover:border-[#1A1C1E] transition-all group"
-                    >
-                      <div className="flex justify-between items-center">
-                        <span className="text-xs font-semibold text-[#1A1C1E]">港味粤语：的士与菠萝包</span>
-                        <span className="text-[10px] text-[#64748B] group-hover:text-[#1A1C1E] flex items-center gap-0.5 font-semibold">体验 <ArrowRight size={12} /></span>
-                      </div>
-                      <p className="text-xs text-slate-500 truncate mt-1">「唔该，幫我叫一架的士企喺巴士站側邊...」</p>
-                    </button>
+              <div className="space-y-2">
+                <span className="px-3 py-1 bg-emerald-50 text-emerald-700 text-[10px] font-bold rounded-full uppercase tracking-wider border border-emerald-200 inline-block">
+                  🎙️ 麦克风实时音频流开启
+                </span>
+                <h4 className="font-bold text-[#1A1C1E] text-base">
+                  语音直录模式已激活，请直接开口说话
+                </h4>
+                <p className="text-xs text-slate-500 max-w-sm leading-relaxed mx-auto">
+                  Lingua Flow 会将您说出的每一个字实时输入在左侧输入框内，无需点击任何预置提示项。
+                </p>
+              </div>
 
-                    {/* Cantonese Guangzhou */}
-                    <button
-                      onClick={() => applyQuickPhrase("今日真系热到飞起，落雨湿湿，等阵我们去饮凉茶，搞两碗双皮奶吃下。", "cantonese")}
-                      className="w-full text-left p-3 rounded-xl bg-slate-50 border border-[#E2E8F0] hover:border-[#1A1C1E] transition-all group"
-                    >
-                      <div className="flex justify-between items-center">
-                        <span className="text-xs font-semibold text-[#1A1C1E]">广州粤语：凉茶与双皮奶</span>
-                        <span className="text-[10px] text-[#64748B] group-hover:text-[#1A1C1E] flex items-center gap-0.5 font-semibold">体验 <ArrowRight size={12} /></span>
-                      </div>
-                      <p className="text-xs text-slate-500 truncate mt-1">「今日真系热到飞起，落雨湿湿，等阵我们去饮凉茶...」</p>
-                    </button>
+              <button
+                type="button"
+                onClick={stopSpeechRecognition}
+                className="px-5 py-2.5 bg-red-500 hover:bg-red-600 text-white rounded-xl text-xs font-semibold flex items-center gap-1.5 transition-all shadow-md transform active:scale-95"
+              >
+                <MicOff size={14} /> 停止语音输入
+              </button>
+            </div>
+          ) : (
+            <div className="bg-white rounded-3xl border border-[#E2E8F0] shadow-sm p-6 flex flex-col justify-between min-h-[300px]">
+              <div>
+                <div className="flex items-center gap-2 mb-4">
+                  <Languages className="text-[#1A1C1E]" size={18} />
+                  <h4 className="font-semibold text-[#1A1C1E] text-sm uppercase tracking-wider">
+                    {direction === "from_mandarin" ? "普通话 ➜ 方言本土特色句一键体验" : "方言与英语本土词语一键体验"}
+                  </h4>
+                </div>
+                <p className="text-xs text-[#64748B] mb-4 leading-relaxed">
+                  {direction === "from_mandarin" 
+                    ? "点击普通话名句，一键体验 DeepSeek 自动将其润色生成不同地域的极具人情味、原汁原味的特色方言与英语口音译文："
+                    : "点击下方特色名句，一键体验 DeepSeek 对不同地域特色口音及俚语特征的分析报告："}
+                </p>
+                
+                <div className="space-y-3">
+                  {direction === "to_mandarin" ? (
+                    <>
+                      {/* Cantonese HK */}
+                      <button
+                        onClick={() => applyQuickPhrase("唔该，幫我叫一架的士企喺巴士站側邊，顺便买返盒菠萝包。", "cantonese")}
+                        className="w-full text-left p-3 rounded-xl bg-slate-50 border border-[#E2E8F0] hover:border-[#1A1C1E] transition-all group"
+                      >
+                        <div className="flex justify-between items-center">
+                          <span className="text-xs font-semibold text-[#1A1C1E]">港味粤语：的士与菠萝包</span>
+                          <span className="text-[10px] text-[#64748B] group-hover:text-[#1A1C1E] flex items-center gap-0.5 font-semibold">体验 <ArrowRight size={12} /></span>
+                        </div>
+                        <p className="text-xs text-slate-500 truncate mt-1">「唔该，幫我叫一架的士企喺巴士站側邊...」</p>
+                      </button>
 
-                    {/* English British vs US */}
-                    <button
-                      onClick={() => applyQuickPhrase("I went down in the lift to check my lorry's boot, but left the rubbish in the flat.", "english")}
-                      className="w-full text-left p-3 rounded-xl bg-slate-50 border border-[#E2E8F0] hover:border-[#1A1C1E] transition-all group"
-                    >
-                      <div className="flex justify-between items-center">
-                        <span className="text-xs font-semibold text-[#1A1C1E]">英式表达：Lorry & Boot & Flat</span>
-                        <span className="text-[10px] text-[#64748B] group-hover:text-[#1A1C1E] flex items-center gap-0.5 font-semibold">体验 <ArrowRight size={12} /></span>
-                      </div>
-                      <p className="text-xs text-slate-400 font-mono truncate mt-1">"I went down in the lift to check my lorry's..."</p>
-                    </button>
-                  </>
-                ) : (
-                  <>
-                    {/* Preset Mandarin 1 -> HK Cantonese */}
-                    <button
-                      onClick={() => applyQuickPhrase("麻烦你帮我叫一辆出租车停在公交站旁边，顺便买一盒菠萝面包。", "粤语 (香港口音)", "from_mandarin")}
-                      className="w-full text-left p-3 rounded-xl bg-slate-50 border border-[#E2E8F0] hover:border-[#1A1C1E] transition-all group"
-                    >
-                      <div className="flex justify-between items-center">
-                        <span className="text-xs font-semibold text-[#1A1C1E]">普通话 ➜ 港式粤语（的士与面包）</span>
-                        <span className="text-[10px] text-[#64748B] group-hover:text-[#1A1C1E] flex items-center gap-0.5 font-semibold">体验 <ArrowRight size={12} /></span>
-                      </div>
-                      <p className="text-xs text-slate-500 truncate mt-1">「麻烦你帮我叫一辆出租车停在巴士站旁边，顺便买一个菠萝面包。」</p>
-                    </button>
+                      {/* Cantonese Guangzhou */}
+                      <button
+                        onClick={() => applyQuickPhrase("今日真系热到飞起，落雨湿湿，等阵我们去饮凉茶，搞两碗双皮奶吃下。", "cantonese")}
+                        className="w-full text-left p-3 rounded-xl bg-slate-50 border border-[#E2E8F0] hover:border-[#1A1C1E] transition-all group"
+                      >
+                        <div className="flex justify-between items-center">
+                          <span className="text-xs font-semibold text-[#1A1C1E]">广州粤语：凉茶与双皮奶</span>
+                          <span className="text-[10px] text-[#64748B] group-hover:text-[#1A1C1E] flex items-center gap-0.5 font-semibold">体验 <ArrowRight size={12} /></span>
+                        </div>
+                        <p className="text-xs text-slate-500 truncate mt-1">「今日真系热到飞起，落雨湿湿，等阵我们去饮凉茶...」</p>
+                      </button>
 
-                    {/* Preset Mandarin 2 -> GZ Cantonese */}
-                    <button
-                      onClick={() => applyQuickPhrase("今天天气实在太热了，而且下大雨。等会儿我们去喝凉茶，顺便吃碗双皮奶。", "粤语 (广州口音)", "from_mandarin")}
-                      className="w-full text-left p-3 rounded-xl bg-slate-50 border border-[#E2E8F0] hover:border-[#1A1C1E] transition-all group"
-                    >
-                      <div className="flex justify-between items-center">
-                        <span className="text-xs font-semibold text-[#1A1C1E]">普通话 ➔ 穗式粤语（大热天吃双皮奶）</span>
-                        <span className="text-[10px] text-[#64748B] group-hover:text-[#1A1C1E] flex items-center gap-0.5 font-semibold">体验 <ArrowRight size={12} /></span>
-                      </div>
-                      <p className="text-xs text-slate-500 truncate mt-1">「今天天气实在太热了，而且下大雨...」</p>
-                    </button>
+                      {/* English British vs US */}
+                      <button
+                        onClick={() => applyQuickPhrase("I went down in the lift to check my lorry's boot, but left the rubbish in the flat.", "english")}
+                        className="w-full text-left p-3 rounded-xl bg-slate-50 border border-[#E2E8F0] hover:border-[#1A1C1E] transition-all group"
+                      >
+                        <div className="flex justify-between items-center">
+                          <span className="text-xs font-semibold text-[#1A1C1E]">英式表达：Lorry & Boot & Flat</span>
+                          <span className="text-[10px] text-[#64748B] group-hover:text-[#1A1C1E] flex items-center gap-0.5 font-semibold">体验 <ArrowRight size={12} /></span>
+                        </div>
+                        <p className="text-xs text-slate-400 font-mono truncate mt-1">"I went down in the lift to check my lorry's..."</p>
+                      </button>
+                    </>
+                  ) : (
+                    <>
+                      {/* Preset Mandarin 1 -> HK Cantonese */}
+                      <button
+                        onClick={() => applyQuickPhrase("麻烦你帮我叫一辆出租车停在公交站旁边，顺便买一盒菠萝面包。", "粤语 (香港口音)", "from_mandarin")}
+                        className="w-full text-left p-3 rounded-xl bg-slate-50 border border-[#E2E8F0] hover:border-[#1A1C1E] transition-all group"
+                      >
+                        <div className="flex justify-between items-center">
+                          <span className="text-xs font-semibold text-[#1A1C1E]">普通话 ➜ 港式粤语（的士与面包）</span>
+                          <span className="text-[10px] text-[#64748B] group-hover:text-[#1A1C1E] flex items-center gap-0.5 font-semibold">体验 <ArrowRight size={12} /></span>
+                        </div>
+                        <p className="text-xs text-slate-500 truncate mt-1">「麻烦你帮我叫一辆出租车停在巴士站旁边，顺便买一个菠萝面包。」</p>
+                      </button>
 
-                    {/* Preset Mandarin 3 -> US / UK English split */}
-                    <button
-                      onClick={() => applyQuickPhrase("我刚才坐电梯下楼检查我卡车的后备箱，结果把垃圾漏在公寓里了。", "英语 (英式英语)", "from_mandarin")}
-                      className="w-full text-left p-3 rounded-xl bg-slate-50 border border-[#E2E8F0] hover:border-[#1A1C1E] transition-all group"
-                    >
-                      <div className="flex justify-between items-center">
-                        <span className="text-xs font-semibold text-[#1A1C1E]">普通话 ➔ 英式英语表达</span>
-                        <span className="text-[10px] text-[#64748B] group-hover:text-[#1A1C1E] flex items-center gap-0.5 font-semibold">体验 <ArrowRight size={12} /></span>
-                      </div>
-                      <p className="text-xs text-slate-500 truncate mt-1">「我刚才坐电梯下楼检查我卡车的后备箱，结果把垃圾漏在公寓里了。」</p>
-                    </button>
-                  </>
-                )}
+                      {/* Preset Mandarin 2 -> GZ Cantonese */}
+                      <button
+                        onClick={() => applyQuickPhrase("今天天气实在太热了，而且下大雨。等会儿我们去喝凉茶，顺便吃碗双皮奶。", "粤语 (广州口音)", "from_mandarin")}
+                        className="w-full text-left p-3 rounded-xl bg-slate-50 border border-[#E2E8F0] hover:border-[#1A1C1E] transition-all group"
+                      >
+                        <div className="flex justify-between items-center">
+                          <span className="text-xs font-semibold text-[#1A1C1E]">普通话 ➔ 穗式粤语（大热天吃双皮奶）</span>
+                          <span className="text-[10px] text-[#64748B] group-hover:text-[#1A1C1E] flex items-center gap-0.5 font-semibold">体验 <ArrowRight size={12} /></span>
+                        </div>
+                        <p className="text-xs text-slate-500 truncate mt-1">「今天天气实在太热了，而且下大雨...」</p>
+                      </button>
+
+                      {/* Preset Mandarin 3 -> US / UK English split */}
+                      <button
+                        onClick={() => applyQuickPhrase("我刚才坐电梯下楼检查我卡车的后备箱，结果把垃圾漏在公寓里了。", "英语 (英式英语)", "from_mandarin")}
+                        className="w-full text-left p-3 rounded-xl bg-slate-50 border border-[#E2E8F0] hover:border-[#1A1C1E] transition-all group"
+                      >
+                        <div className="flex justify-between items-center">
+                          <span className="text-xs font-semibold text-[#1A1C1E]">普通话 ➔ 英式英语表达</span>
+                          <span className="text-[10px] text-[#64748B] group-hover:text-[#1A1C1E] flex items-center gap-0.5 font-semibold">体验 <ArrowRight size={12} /></span>
+                        </div>
+                        <p className="text-xs text-slate-500 truncate mt-1">「我刚才坐电梯下楼检查我卡车的后备箱，结果把垃圾漏在公寓里了。」</p>
+                      </button>
+                    </>
+                  )}
+                </div>
+              </div>
+
+              <div className="text-[11px] text-[#94A3B8] flex items-center gap-1 mt-4 pt-4 border-t border-[#F1F5F9] font-medium">
+                <HelpCircle size={14} className="text-[#94A3B8]" />
+                <span>注：由 DeepSeek 强力驱动，精准润色转换方言特产音译及地域语法词语。</span>
               </div>
             </div>
-
-            <div className="text-[11px] text-[#94A3B8] flex items-center gap-1 mt-4 pt-4 border-t border-[#F1F5F9] font-medium">
-              <HelpCircle size={14} className="text-[#94A3B8]" />
-              <span>注：由 DeepSeek 强力驱动，精准润色转换方言特产音译及地域语法词语。</span>
-            </div>
-          </div>
+          )
         )}
 
         {/* TTS / Voice Control configuration card if we have input but no output yet */}
@@ -949,6 +1024,14 @@ export default function TranslatorWorkspace({
           </div>
         )}
       </div>
+
+      {/* Photo OCR Modal Overlay */}
+      <PhotoOcrModal
+        isOpen={isOcrOpen}
+        onClose={() => setIsOcrOpen(false)}
+        onOcrSuccess={handleOcrSuccess}
+        onOcrError={handleOcrError}
+      />
     </div>
   );
 }

@@ -19,6 +19,9 @@ export interface TranslationResult {
   detectedLanguage: string;
   accentAnalysis: AccentAnalysis;
   culturalTips: string;
+  extractedText?: string;
+  cantoneseTranslation?: string;
+  englishTranslation?: string;
 }
 
 export interface HistoryEntry {

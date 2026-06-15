@@ -3,6 +3,7 @@ import path from "path";
 import dns from "dns";
 import { createServer as createViteServer } from "vite";
 import dotenv from "dotenv";
+import { GoogleGenAI, Type } from "@google/genai";
 
 // Load environment variables
 dotenv.config();
@@ -13,8 +14,9 @@ dns.setDefaultResultOrder("ipv4first");
 const app = express();
 const PORT = 3000;
 
-// Enable JSON body parsing
-app.use(express.json());
+// Enable JSON body parsing with increased limit for base64 image uploads
+app.use(express.json({ limit: "50mb" }));
+app.use(express.urlencoded({ limit: "50mb", extended: true }));
 
 // API route for translation & accent analysis
 app.post("/api/translate", async (req, res) => {
@@ -174,6 +176,176 @@ app.post("/api/translate", async (req, res) => {
     console.error("Translation handler error:", error);
     return res.status(500).json({
       error: "服务器发生错误，请稍后再试",
+      details: error.message || error
+    });
+  }
+});
+
+// API route for photo OCR and translation using Gemini for OCR and DeepSeek for Translation
+app.post("/api/ocr-translate", async (req, res) => {
+  try {
+    const { imageBase64, customApiKey } = req.body;
+
+    if (!imageBase64 || imageBase64.trim() === "") {
+      return res.status(400).json({ error: "请提供图片进行识别" });
+    }
+
+    const geminiKey = process.env.GEMINI_API_KEY;
+    if (!geminiKey) {
+      return res.status(500).json({
+        error: "服务器端未检测到 GEMINI_API_KEY。多模态图片识别需要 Gemini 支持，请通知管理员在环境变量配置。"
+      });
+    }
+
+    const deepseekKey = customApiKey || process.env.DEEPSEEK_API_KEY;
+    if (!deepseekKey) {
+      return res.status(401).json({
+        error: "未检测到 DeepSeek API key。请点击页面右上角「密钥设置」配入您的 DeepSeek API Key，或在服务器环境变量中配置 DEEPSEEK_API_KEY。"
+      });
+    }
+
+    // Step 1: Optical Character Recognition (OCR) character extraction using Gemini
+    const ai = new GoogleGenAI({
+      apiKey: geminiKey,
+      httpOptions: {
+        headers: {
+          "User-Agent": "aistudio-build",
+        }
+      }
+    });
+
+    // Parse base64 parts
+    let mimeType = "image/jpeg";
+    let base64Data = imageBase64;
+    if (imageBase64.includes(";base64,")) {
+      const parts = imageBase64.split(";base64,");
+      mimeType = parts[0].replace("data:", "");
+      base64Data = parts[1];
+    }
+
+    const imagePart = {
+      inlineData: {
+        mimeType,
+        data: base64Data,
+      }
+    };
+
+    const ocrPromptText = `你是一个高精度的光学字符识别 (OCR) 专家。
+请仔细分析识别这张图片，提取图片里的所有中文段落、粤语方言用语字眼、英文、符号及标点。
+请按段落与换行关系，高保真完整输出识别到的原文。
+必须直接输出文本，不要包含任何前导引导句、空行解释、Markdown 表格或 Markdown 代码块包裹！`;
+
+    const ocrResponse = await ai.models.generateContent({
+      model: "gemini-3.5-flash",
+      contents: [
+        imagePart,
+        { text: ocrPromptText }
+      ],
+    });
+
+    const extractedText = ocrResponse.text ? ocrResponse.text.trim() : "";
+
+    if (!extractedText || extractedText.trim() === "") {
+      return res.status(400).json({ error: "图片中无法识读出任何有效的文字。请确保拍照清晰无遮挡，并重新扫拍。" });
+    }
+
+    // Step 2: Use DeepSeek to translate & analyze dialect features of the extracted text
+    const systemPromptMessage = `你是一个全能语言翻译和口音特征词深入溯源解剖专家。接下来，你会收到一段从图片中 OCR 提取出的原始真实文本。
+请根据它的实际语言属性，进行智能高精度翻译与口音语法特征分析。
+
+请遵循以下语言转化路线：
+1. 【自动判别输入属性】：识别输入属于英文、粤语（包含港派用语、俗字）还是标准现代国语中文（简体/繁体）。
+2. 【若为英文或粤语】：请在 "translation" 字段放入翻译为极度流畅自然的标准现代普通话中文。
+3. 【若为标准普通话中文】：请【同时】生成另外两版超本土译文并拼装：
+   - 极其地道入骨、符合粤港澳大湾区日常交往习惯的粤语口语转换，并放入 "cantoneseTranslation" 属性。
+   - 地道日常流利自然的英语，并放入 "englishTranslation" 属性。
+   - "translation" 属性可放置一句提纲挈领的两言对比总结。
+4. 【发音标注与分析】：
+   - "pinyin" 字段内标注读音：如果主要译文或转换终点是普通话，则标带音调普通话拼音；如果终点是粤语，则标清晰标准的Jyutping粤语拼音。
+   - "accentAnalysis" 做专业特色解释。
+
+必须且只能使用规范 JSON 格式响应。不要包含任何额外的 Markdown 反引号（如 \`\`\`json 等）！
+格式必须严格符合下方 JSON 范式：
+{
+  "detectedLanguage": "检测到的语种及地域背景（例如：'粤语 (广州口音)' 或 '英语 (伦敦英音)'）",
+  "translation": "主要普通话翻译/转换对照总结",
+  "cantoneseTranslation": "地道粤语本土化口语译文（仅在输入文为普通话中文时生成，否则不返或空字）",
+  "englishTranslation": "地道英文本土化译文（仅在输入文为普通话中文时生成，否则不返或空字）",
+  "pinyin": "词句读音助读标注（Jyutping粤拼或普通话拼音带声调）",
+  "accentAnalysis": {
+    "accentName": "具体腔调名称（例如：'港式粤语'、'老伦敦音'、'现代标准普通话'等）",
+    "confidence": 95,
+    "description": "用简洁且深具学术见解的一两句话，概括该句里的用词特色",
+    "markers": [
+      {
+        "word": "提取出的典型局部特征词汇字眼",
+        "type": "词汇类型（如：方言俗语、外来音译词、特定的助词、语气词等）",
+        "meaning": "该特征词对应的具体核心释义",
+        "standardMandarin": "对应的标准直白普通话词汇",
+        "explanation": "简要解剖此词语的方言或英文特定文化成因、流行历史"
+      }
+    ]
+  },
+  "culturalTips": "一条有助于两地人士流畅破冰、避免文化误会、温馨且实用的交往文化护航贴士"
+}`;
+
+    const userPromptMessage = `需要分析并翻译的源提取文本为：
+"${extractedText}"
+
+请立即为您生成的翻译分析响应：`;
+
+    const dsResponse = await fetch("https://api.deepseek.com/chat/completions", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "Authorization": `Bearer ${deepseekKey}`
+      },
+      body: JSON.stringify({
+        model: "deepseek-chat",
+        messages: [
+          { role: "system", content: systemPromptMessage },
+          { role: "user", content: userPromptMessage }
+        ],
+        temperature: 0.3,
+        response_format: { type: "json_object" }
+      })
+    });
+
+    if (!dsResponse.ok) {
+      const dsErrText = await dsResponse.text();
+      console.error("DeepSeek API error during OCR Translation:", dsErrText);
+      return res.status(dsResponse.status).json({
+        error: `DeepSeek 引擎在翻译时发生报错 (HTTP ${dsResponse.status})`,
+        details: dsErrText
+      });
+    }
+
+    const dsData = await dsResponse.json();
+    const assistantMessage = dsData.choices?.[0]?.message?.content;
+
+    if (!assistantMessage) {
+      throw new Error("DeepSeek 翻译返回内容为空");
+    }
+
+    let cleanJson = assistantMessage.trim();
+    if (cleanJson.startsWith("```json")) {
+      cleanJson = cleanJson.substring(7);
+    }
+    if (cleanJson.endsWith("```")) {
+      cleanJson = cleanJson.substring(0, cleanJson.length - 3);
+    }
+
+    const parsedResult = JSON.parse(cleanJson.trim());
+    
+    // Supplement origin text
+    parsedResult.extractedText = extractedText;
+
+    return res.json(parsedResult);
+
+  } catch (error: any) {
+    console.error("OCR Translation error:", error);
+    return res.status(500).json({
+      error: "拍照识别翻译发生错误，请稍后再试",
       details: error.message || error
     });
   }
