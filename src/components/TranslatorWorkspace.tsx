@@ -164,37 +164,134 @@ export default function TranslatorWorkspace({
     }
 
     try {
-      const response = await fetch("/api/translate", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          text: trimmed,
-          sourceLanguage: sourceLang,
-          customApiKey: customApiKey,
-        }),
-      });
+      let finalResult: any = null;
 
-      const data = await response.json();
+      // 1. 如果配置了本地私有 Key，优先使用纯前端直连，以解决 Vercel / Serverless 部署下的后台 API 404/不兼容限制
+      if (customApiKey && customApiKey.trim() !== "") {
+        try {
+          const systemPrompt = `你是一个顶尖的语言专家、粤语与英语翻译大师以及口音/方言词汇分析专家。
+你的任务是将输入的粤语（繁体或简体字）或英语（各种口音）翻译成优美、自然、地道的标准现代中文（普通话/简体中文）。
+同时，你需要根据文本内容、使用的特殊汉字、拼写习惯、外来词或特殊俚语，自动分析该输入最符合哪个地域的口音或细分方言（例如：粤语的香港口音、广州口音、欧美华侨口音；英语的美式口音、英式口音、印度口音、新加坡/新式英语等），并提取出特征词汇进行分析。
 
-      if (!response.ok) {
-        throw new Error(data.error || `请求失败 (${response.status})`);
+请严格以下列 JSON 格式返回，不要包含任何额外的 Markdown 标记（例如 \`\`\`json \`\`\`）、解释或空白文字：
+{
+  "translation": "标准现代中文普通话的优雅翻译",
+  "pinyin": "翻译后中文的拼音表示，以便用户发音。每个汉字拼音用空格隔开，包含音调",
+  "detectedLanguage": "检测到的具体语种及口音（例如 '粤语 (香港口音)' 或 '英语 (美式英语)'）",
+  "accentAnalysis": {
+    "accentName": "口音/地域语种名称（如：港式粤语 / 伦敦英音 / 美式英语俚语等）",
+    "confidence": 92,
+    "description": "一两句话概括其口音及词汇特征。例如：‘该句子中使用了“唔该”和英文缩写，是典型粤港地区中英夹杂的语言习惯，口音更偏向香港口音。’",
+    "markers": [
+      {
+        "word": "检测到的特征词汇词语",
+        "type": "词汇类型（如：方言词、外来词、俚语、发音习惯）",
+        "meaning": "该词在上下文中的本意",
+        "standardMandarin": "对应的标准普通话表达方式",
+        "explanation": "为什么该词是此口音/方言的代表，它有什么特殊历史或语流习惯"
+      }
+    ]
+  },
+  "culturalTips": "一句简短的地域文化、用词小贴士"
+}`;
+
+          const userPrompt = `需要分析并翻译的文本是：
+"${trimmed}"
+
+（可选参考）用户选定的源语言范围是：${sourceLang || "自动识别(粤语/英语)"}
+
+请开始分析并输出 JSON：`;
+
+          const directResponse = await fetch("https://api.deepseek.com/chat/completions", {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              "Authorization": `Bearer ${customApiKey}`
+            },
+            body: JSON.stringify({
+              model: "deepseek-chat",
+              messages: [
+                { role: "system", content: systemPrompt },
+                { role: "user", content: userPrompt }
+              ],
+              temperature: 0.3,
+              response_format: { type: "json_object" }
+            })
+          });
+
+          if (!directResponse.ok) {
+            const errText = await directResponse.text();
+            throw new Error(`直接连接 DeepSeek 服务端报错 (HTTP ${directResponse.status}): ${errText}`);
+          }
+
+          const directData = await directResponse.json();
+          const contentStr = directData.choices?.[0]?.message?.content;
+          if (!contentStr) {
+            throw new Error("DeepSeek 返回内容为空");
+          }
+
+          let cleanJson = contentStr.trim();
+          if (cleanJson.startsWith("```json")) {
+            cleanJson = cleanJson.substring(7);
+          }
+          if (cleanJson.endsWith("```")) {
+            cleanJson = cleanJson.substring(0, cleanJson.length - 3);
+          }
+          finalResult = JSON.parse(cleanJson.trim());
+          console.log("纯前端直联模式分析翻译成功！");
+        } catch (directErr: any) {
+          console.warn("纯前端直连接口失败，尝试回退到后端代理:", directErr);
+          // 继续，回退到 backend API 进行处理
+        }
+      }
+
+      // 2. 纯客户端没有拿到数据，或者没有配置 customApiKey，则按常规调用后端 express API
+      if (!finalResult) {
+        const response = await fetch("/api/translate", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            text: trimmed,
+            sourceLanguage: sourceLang,
+            customApiKey: customApiKey,
+          }),
+        });
+
+        const contentType = response.headers.get("content-type");
+        if (contentType && contentType.includes("application/json")) {
+          const data = await response.json();
+          if (!response.ok) {
+            throw new Error(data.error || `请求失败 (${response.status})`);
+          }
+          finalResult = data;
+        } else {
+          // 处理非 JSON 的情况，诸如 404/502 状态的 HTML (Vercel, Netlify 常见)
+          const textResponse = await response.text();
+          if (response.status === 404 || textResponse.includes("Not Found") || textResponse.includes("cannot be found") || textResponse.includes("<html")) {
+            throw new Error(
+              `后端服务未就绪 (HTTP 404)。\n\n温馨提示: 如果您当前是将应用部署在 Vercel / Netlify / GitHub Pages 等静态或半静态托管平台上，由于此类平台默认无法运行定制的 Node/Express 后端长服务 (server.ts)，建议点击页面右上角的「秘钥设置」配入您的私有 DeepSeek Key。LIngua Flow 将立即激活“免服务器纯前端直连引擎”，直接安全请求 DeepSeek，无需依赖后台中转即可完美运行整个程序！`
+            );
+          } else {
+            throw new Error(`服务器返回了非标准响应内容 (HTTP ${response.status}): ${textResponse.slice(0, 150)}...`);
+          }
+        }
       }
 
       // Convert translated text to Traditional if selected
-      let finalResult = { ...data };
+      let finalProcessed = { ...finalResult };
       if (targetVariant === "traditional") {
         // Simple conversion if needed, but standard deepseek prompt handles basic or deep translations.
         // We can let DeepSeek do it directly, but for client-side versatility we just keep what Model returns
         // and tell the parent.
       }
 
-      onTranslateSuccess(finalResult, trimmed, sourceLang === "auto" ? finalResult.detectedLanguage : sourceLang);
+      onTranslateSuccess(finalProcessed, trimmed, sourceLang === "auto" ? finalProcessed.detectedLanguage : sourceLang);
       
       // Auto-TTS if enabled
       if (autoSpeak) {
-        speakText(finalResult.translation);
+        speakText(finalProcessed.translation);
       }
 
     } catch (err: any) {
