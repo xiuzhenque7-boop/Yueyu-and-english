@@ -3,7 +3,8 @@ import path from "path";
 import dns from "dns";
 import { createServer as createViteServer } from "vite";
 import dotenv from "dotenv";
-import { GoogleGenAI, Type } from "@google/genai";
+import { GoogleGenAI } from "@google/genai";
+import Tesseract from "tesseract.js";
 
 // Load environment variables
 dotenv.config();
@@ -181,7 +182,7 @@ app.post("/api/translate", async (req, res) => {
   }
 });
 
-// API route for photo OCR and translation using Gemini for OCR and DeepSeek for Translation
+// API route for photo OCR and translation using Local/Gemini OCR and DeepSeek for Translation
 app.post("/api/ocr-translate", async (req, res) => {
   try {
     const { imageBase64, customApiKey } = req.body;
@@ -190,29 +191,12 @@ app.post("/api/ocr-translate", async (req, res) => {
       return res.status(400).json({ error: "请提供图片进行识别" });
     }
 
-    const geminiKey = process.env.GEMINI_API_KEY;
-    if (!geminiKey) {
-      return res.status(500).json({
-        error: "服务器端未检测到 GEMINI_API_KEY。多模态图片识别需要 Gemini 支持，请通知管理员在环境变量配置。"
-      });
-    }
-
     const deepseekKey = customApiKey || process.env.DEEPSEEK_API_KEY;
     if (!deepseekKey) {
       return res.status(401).json({
         error: "未检测到 DeepSeek API key。请点击页面右上角「密钥设置」配入您的 DeepSeek API Key，或在服务器环境变量中配置 DEEPSEEK_API_KEY。"
       });
     }
-
-    // Step 1: Optical Character Recognition (OCR) character extraction using Gemini
-    const ai = new GoogleGenAI({
-      apiKey: geminiKey,
-      httpOptions: {
-        headers: {
-          "User-Agent": "aistudio-build",
-        }
-      }
-    });
 
     // Parse base64 parts
     let mimeType = "image/jpeg";
@@ -223,30 +207,72 @@ app.post("/api/ocr-translate", async (req, res) => {
       base64Data = parts[1];
     }
 
-    const imagePart = {
-      inlineData: {
-        mimeType,
-        data: base64Data,
-      }
-    };
+    let extractedText = "";
+    let ocrFailed = false;
 
-    const ocrPromptText = `你是一个高精度的光学字符识别 (OCR) 专家。
+    // Use deepseekKey (which is DEEPSEEK_API_KEY) also for Gemini if it is a unified/proxy key that supports multimodal vision
+    if (deepseekKey && !deepseekKey.startsWith("sk-")) {
+      try {
+        console.log("Trying Gemini multimodal API with DEEPSEEK_API_KEY proxy key for high-speed OCR...");
+        const ai = new GoogleGenAI({
+          apiKey: deepseekKey,
+          httpOptions: {
+            headers: {
+              "User-Agent": "aistudio-build",
+            }
+          }
+        });
+
+        const imagePart = {
+          inlineData: {
+            mimeType,
+            data: base64Data,
+          }
+        };
+
+        const ocrPromptText = `你是一个高精度的光学字符识别 (OCR) 专家。
 请仔细分析识别这张图片，提取图片里的所有中文段落、粤语方言用语字眼、英文、符号及标点。
 请按段落与换行关系，高保真完整输出识别到的原文。
 必须直接输出文本，不要包含任何前导引导句、空行解释、Markdown 表格或 Markdown 代码块包裹！`;
 
-    const ocrResponse = await ai.models.generateContent({
-      model: "gemini-3.5-flash",
-      contents: [
-        imagePart,
-        { text: ocrPromptText }
-      ],
-    });
+        const ocrResponse = await ai.models.generateContent({
+          model: "gemini-3.5-flash",
+          contents: [
+            imagePart,
+            { text: ocrPromptText }
+          ],
+        });
 
-    const extractedText = ocrResponse.text ? ocrResponse.text.trim() : "";
+        extractedText = ocrResponse.text ? ocrResponse.text.trim() : "";
+      } catch (geminiErr: any) {
+        console.warn("Proxy Gemini OCR failed, falling back to local Tesseract.js:", geminiErr.message || geminiErr);
+        ocrFailed = true;
+      }
+    } else {
+      ocrFailed = true;
+    }
+
+    // Default Fallback: Runs Tesseract.js local server-side OCR (does NOT require any API key / works completely offline/locally!)
+    if (ocrFailed || !extractedText) {
+      try {
+        console.log("Running local Tesseract.js OCR engine...");
+        const buffer = Buffer.from(base64Data, "base64");
+        
+        // Multi-language recognition including English, Simplified Chinese and Traditional Chinese (fully covers Cantonese and standard fonts)
+        const ocrResult = await Tesseract.recognize(buffer, "eng+chi_sim+chi_tra");
+        extractedText = ocrResult.data.text ? ocrResult.data.text.trim() : "";
+        console.log("Local Tesseract OCR successfully processed. Extracted length:", extractedText.length);
+      } catch (tessErr: any) {
+        console.error("Local Tesseract OCR engine crashed:", tessErr);
+        return res.status(500).json({
+          error: "图像识别失败。由于您的 API Key 属于纯文本型 DeepSeek 金钥，系统在转入本地 Tesseract 引擎分析时遇到异常，请上传光线充足且清晰、非手写文字的文件重试。",
+          details: tessErr.message || tessErr
+        });
+      }
+    }
 
     if (!extractedText || extractedText.trim() === "") {
-      return res.status(400).json({ error: "图片中无法识读出任何有效的文字。请确保拍照清晰无遮挡，并重新扫拍。" });
+      return res.status(400).json({ error: "图片中无法识读出任何有效的文字。请确保图片清晰，并重新扫拍。" });
     }
 
     // Step 2: Use DeepSeek to translate & analyze dialect features of the extracted text
