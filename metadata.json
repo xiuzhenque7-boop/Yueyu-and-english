@@ -1,0 +1,6 @@
+{
+  "name": "粤英智能翻译工具",
+  "description": "通过语音或文字将粤语和英语翻译为中文，支持口音自动分析与即时语音朗读",
+  "requestFramePermissions": ["microphone"],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
