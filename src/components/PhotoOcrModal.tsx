@@ -94,12 +94,23 @@ export default function PhotoOcrModal({
         })
       });
 
-      if (!response.ok) {
-        const errJson = await response.json();
-        throw new Error(errJson.error || errJson.details || `HTTP 错误码 ${response.status}`);
+      const responseText = await response.text();
+      let parsedResult: any;
+
+      try {
+        parsedResult = JSON.parse(responseText);
+      } catch (e) {
+        console.error("Failed to parse server response as JSON:", responseText);
+        throw new Error(
+          `服务器返回了非 JSON 格式的错误信息 (HTTP ${response.status})。可能是因为沙盒容器在运行 Tesseract.js 时 CPU 满载或内存溢出超时重启。建议您换用更简洁清晰、非手写的大文字图片（或稍微裁剪并降低分辨率后）再试。`
+        );
       }
 
-      const ocrResult: TranslationResult = await response.json();
+      if (!response.ok) {
+        throw new Error(parsedResult.error || parsedResult.details || `HTTP 错误码 ${response.status}`);
+      }
+
+      const ocrResult: TranslationResult = parsedResult;
       
       // Close modal and call Success Handler callback
       handleClose();

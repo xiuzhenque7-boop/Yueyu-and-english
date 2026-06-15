@@ -210,10 +210,54 @@ app.post("/api/ocr-translate", async (req, res) => {
     let extractedText = "";
     let ocrFailed = false;
 
-    // Use deepseekKey (which is DEEPSEEK_API_KEY) also for Gemini if it is a unified/proxy key that supports multimodal vision
-    if (deepseekKey && !deepseekKey.startsWith("sk-")) {
+    // Priority 1: Use server-side pre-configured GEMINI_API_KEY for free high-speed multimodal OCR
+    const serverGeminiKey = process.env.GEMINI_API_KEY;
+    if (serverGeminiKey) {
       try {
-        console.log("Trying Gemini multimodal API with DEEPSEEK_API_KEY proxy key for high-speed OCR...");
+        console.log("Using server environmental GEMINI_API_KEY for lightning-fast multimodal OCR...");
+        const ai = new GoogleGenAI({
+          apiKey: serverGeminiKey,
+          httpOptions: {
+            headers: {
+              "User-Agent": "aistudio-build",
+            }
+          }
+        });
+
+        const imagePart = {
+          inlineData: {
+            mimeType,
+            data: base64Data,
+          }
+        };
+
+        const ocrPromptText = `你是一个高精度的光学字符识别 (OCR) 专家。
+请仔细分析识别这张图片，提取图片里的所有中文段落、粤语方言用语字眼、英文、符号及标点。
+请按段落与换行关系，高保真完整输出识别到的原文。
+必须直接输出文本，不要包含任何前导引导句、空行解释、Markdown 表格或 Markdown 代码块包裹！`;
+
+        const ocrResponse = await ai.models.generateContent({
+          model: "gemini-3.5-flash",
+          contents: [
+            imagePart,
+            { text: ocrPromptText }
+          ],
+        });
+
+        extractedText = ocrResponse.text ? ocrResponse.text.trim() : "";
+        console.log("Server Gemini OCR completed successfully. Extracted length:", extractedText.length);
+      } catch (geminiErr: any) {
+        console.warn("Server environmental Gemini OCR failed, trying custom proxy / Tesseract fallback:", geminiErr.message || geminiErr);
+        ocrFailed = true;
+      }
+    } else {
+      ocrFailed = true;
+    }
+
+    // Priority 2: Use custom deepseekKey if it's a unified proxy key supporting Gemini multimodal vision
+    if ((ocrFailed || !extractedText) && deepseekKey && !deepseekKey.startsWith("sk-")) {
+      try {
+        console.log("Trying Gemini multimodal API with custom proxy key...");
         const ai = new GoogleGenAI({
           apiKey: deepseekKey,
           httpOptions: {
@@ -244,15 +288,15 @@ app.post("/api/ocr-translate", async (req, res) => {
         });
 
         extractedText = ocrResponse.text ? ocrResponse.text.trim() : "";
-      } catch (geminiErr: any) {
-        console.warn("Proxy Gemini OCR failed, falling back to local Tesseract.js:", geminiErr.message || geminiErr);
+        console.log("Custom proxy Gemini OCR completed successfully. Extracted length:", extractedText.length);
+        ocrFailed = false;
+      } catch (geminiProxyErr: any) {
+        console.warn("Custom proxy Gemini OCR also failed, falling back to local Tesseract.js:", geminiProxyErr.message || geminiProxyErr);
         ocrFailed = true;
       }
-    } else {
-      ocrFailed = true;
     }
 
-    // Default Fallback: Runs Tesseract.js local server-side OCR (does NOT require any API key / works completely offline/locally!)
+    // Priority 3: Fallback to local server-side Tesseract.js OCR
     if (ocrFailed || !extractedText) {
       try {
         console.log("Running local Tesseract.js OCR engine...");
